@@ -11,7 +11,7 @@ from transformers import AutoTokenizer, AutoModel
 # --- Настройки ---
 MODEL_NAME = "jinaai/jina-embeddings-v3"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH_SIZE = 16
+BATCH_SIZE = 32
 MAX_CHARS = 4000
 DATA_PATH = '/data/*.parquet'
 CACHE_DIR = "/data/cache"
@@ -39,10 +39,6 @@ splits = {
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
 model = AutoModel.from_pretrained(MODEL_NAME).to(DEVICE).eval()
 model = model.half()  # FP16 для ускорения
-
-# Компиляция модели (если доступно)
-if hasattr(torch, "compile"):
-    model = torch.compile(model)
 
 # Прогрев модели
 _ = model(**tokenizer(["Warmup text"], return_tensors="pt", truncation=True, max_length=128).to(DEVICE))
