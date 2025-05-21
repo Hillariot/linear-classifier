@@ -81,7 +81,7 @@ criterion1 = nn.CrossEntropyLoss(weight=weights1)
 
 print("\n--- Обучение по general_task_name ---")
 train_classifier(clf1, opt1, train_loader1, criterion1)
-torch.save(clf1.state_dict(), "/content/clf_general_task_name.pt")
+torch.save(clf1.state_dict(), "/data/clf_general_task_name.pt")
 
 clf2 = LinearClassifier(embedding_dim, len(set(raw_labels2))).to(DEVICE)
 opt2 = torch.optim.Adam(clf2.parameters(), lr=LR)
@@ -89,4 +89,4 @@ criterion2 = nn.CrossEntropyLoss(weight=weights2)
 
 print("\n--- Обучение по response_format ---")
 train_classifier(clf2, opt2, train_loader2, criterion2)
-torch.save(clf2.state_dict(), "/content/clf_response_format.pt")
+torch.save(clf2.state_dict(), "/data/clf_response_format.pt")
