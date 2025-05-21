@@ -10,7 +10,7 @@ import os
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BATCH_SIZE = 256
 EPOCHS = 3
-LR = 1e-5
+LR = 1e-4
 CACHE_DIR = "/data/cache"
 
 # --- Загрузка датасета ---
