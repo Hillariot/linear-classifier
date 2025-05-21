@@ -2,6 +2,7 @@ import torch
 import pandas as pd
 import glob
 import os
+import gc
 import pickle
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
@@ -10,7 +11,7 @@ from transformers import AutoTokenizer, AutoModel
 # --- Настройки ---
 MODEL_NAME = "jinaai/jina-embeddings-v3"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
-BATCH_SIZE = 256
+BATCH_SIZE = 128
 DATA_PATH = '/data/*.parquet'
 CACHE_DIR = "/data/cache"
 
@@ -49,12 +50,19 @@ def mean_pooling(model_output, attention_mask):
 def compute_embeddings(texts):
     embeddings = []
     for i in tqdm(range(0, len(texts), BATCH_SIZE), desc="🔍 Кэширование эмбеддингов"):
-        batch_texts = texts[i:i+BATCH_SIZE]
+        batch_texts = texts[i:i + BATCH_SIZE]
         encoded_input = tokenizer(batch_texts, padding=True, truncation=True, return_tensors="pt").to(DEVICE)
         model_output = model(**encoded_input)
         emb = mean_pooling(model_output, encoded_input['attention_mask'])
+
         embeddings.append(emb.cpu())
+
+        # Очистка памяти
+        del batch_texts, encoded_input, model_output, emb
+        torch.cuda.empty_cache()
+        gc.collect()
     return torch.cat(embeddings, dim=0)
+
 
 # --- Кэширование эмбеддингов и меток ---
 os.makedirs(CACHE_DIR, exist_ok=True)
@@ -75,3 +83,4 @@ for name, split_df in splits.items():
         pickle.dump(texts, f)
 
     print(f"✅ Сохранено: {name}_X.pt, {name}_y.pt, {name}_texts.pkl")
+                                                        
