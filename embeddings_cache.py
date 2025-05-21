@@ -85,6 +85,13 @@ def compute_embeddings(texts):
 os.makedirs(CACHE_DIR, exist_ok=True)
 
 for name, split_df in splits.items():
+    x_path = f"{CACHE_DIR}/{name}_X.pt"
+    y_path = f"{CACHE_DIR}/{name}_y.pt"
+    texts_path = f"{CACHE_DIR}/{name}_texts.pkl"
+
+    if os.path.exists(x_path) and os.path.exists(y_path) and os.path.exists(texts_path):
+        print(f"⚠️ Пропущено (уже существует): {name}")
+        continue
     texts = split_df["inputs"].tolist()
     labels = split_df["general_task_name"] if "general" in name else split_df["response_format"]
     labels = labels.astype("category")
