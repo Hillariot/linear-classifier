@@ -8,7 +8,7 @@ from sklearn.model_selection import train_test_split
 from transformers import AutoTokenizer, AutoModel
 
 # --- Настройки ---
-MODEL_NAME = "jinaai/jina-embeddings-v3-base-en"
+MODEL_NAME = "jinaai/jina-embeddings-v3"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 256
 DATA_PATH = '/data/*.parquet'
