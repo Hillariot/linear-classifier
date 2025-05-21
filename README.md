@@ -1,5 +1,5 @@
 # Установка зависимостей:
-!pip install torch transformers pandas scikit-learn jina-embeddings<br>
+!pip install torch transformers pandas scikit-learn<br>
 
 # Установка датасетов:
 from huggingface_hub import snapshot_download<br>
