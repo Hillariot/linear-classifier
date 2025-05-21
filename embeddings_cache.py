@@ -5,10 +5,10 @@ import os
 import pickle
 from tqdm import tqdm
 from sklearn.model_selection import train_test_split
-from jina import JinaEmbeddings
+from transformers import AutoTokenizer, AutoModel
 
 # --- Настройки ---
-MODEL_NAME = "jinaai/jina-embeddings-v3"
+MODEL_NAME = "jinaai/jina-embeddings-v3-base-en"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 BATCH_SIZE = 256
 DATA_PATH = '/data/*.parquet'
@@ -33,17 +33,27 @@ splits = {
     "test_response": stratified_split(df, "response_format")[1],
 }
 
-# --- Модель JINA ---
-encoder = JinaEmbeddings(model_name=MODEL_NAME, device=DEVICE)
+# --- Модель (без JinaEmbeddings) ---
+tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
+model = AutoModel.from_pretrained(MODEL_NAME).to(DEVICE)
+model.eval()
+
+# --- Mean Pooling ---
+def mean_pooling(model_output, attention_mask):
+    token_embeddings = model_output[0]  # (batch_size, seq_len, hidden_size)
+    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
+    return (token_embeddings * input_mask_expanded).sum(1) / input_mask_expanded.sum(1)
 
 # --- Функция для эмбеддингов ---
+@torch.no_grad()
 def compute_embeddings(texts):
     embeddings = []
     for i in tqdm(range(0, len(texts), BATCH_SIZE), desc="🔍 Кэширование эмбеддингов"):
-        batch = texts[i:i+BATCH_SIZE]
-        emb = encoder.encode(batch)  # без task=
-        emb = torch.tensor(emb, dtype=torch.float32)
-        embeddings.append(emb)
+        batch_texts = texts[i:i+BATCH_SIZE]
+        encoded_input = tokenizer(batch_texts, padding=True, truncation=True, return_tensors="pt").to(DEVICE)
+        model_output = model(**encoded_input)
+        emb = mean_pooling(model_output, encoded_input['attention_mask'])
+        embeddings.append(emb.cpu())
     return torch.cat(embeddings, dim=0)
 
 # --- Кэширование эмбеддингов и меток ---
