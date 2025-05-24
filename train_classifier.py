@@ -1,13 +1,16 @@
+import os
+import torch
+import torch.nn as nn
+from torch.utils.data import TensorDataset, DataLoader, WeightedRandomSampler
 import pandas as pd
 from tqdm import tqdm
-import os
 
 # --- Настройки ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BATCH_SIZE = 256
-EPOCHS = 3
+EPOCHS = 6
 LR = 1e-4
-CACHE_DIR = "/data/cache"
+CACHE_DIR = "/data/cache_balanced"
 
 # --- Загрузка датасета ---
 def load_dataset(name):
