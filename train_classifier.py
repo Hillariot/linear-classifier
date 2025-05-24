@@ -2,8 +2,6 @@ import pandas as pd
 from tqdm import tqdm
 import os
 
-
-
 # --- Настройки ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 BATCH_SIZE = 256
