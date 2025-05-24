@@ -61,8 +61,8 @@ def make_balanced_dataset(df, label_column):
 
     grouped = defaultdict(list)
     for i, code in enumerate(label_codes):
-        grouped[code.item()].append(i)
-    min_count = min(len(v) for v in grouped.values())
+        grouped[code].append(i)
+    min_count = min(min(len(v) for v in grouped.values()), 3500)
     print(f"🔄 Балансировка для '{label_column}': по {min_count} примеров")
 
     selected_indices = []
@@ -70,28 +70,37 @@ def make_balanced_dataset(df, label_column):
         selected_indices.extend(random.sample(indices, min_count))
 
     df_balanced = df.iloc[selected_indices].reset_index(drop=True)
-    labels = torch.tensor(label_codes[selected_indices], dtype=torch.long)
+    labels = torch.tensor(df_balanced[label_column].cat.codes.values, dtype=torch.long)
     texts = df_balanced["inputs"].tolist()
     return texts, labels, label_map
 
+
 # --- Основной цикл для всех задач ---
-tasks = {
+tasks = 
+{
     "general_task_name": "clf_general_task_name",
     "response_format": "clf_response_format"
 }
 
-for label_col, filename_prefix in tasks.items():
-    print(f"\n📊 Обработка задачи: {label_col}")
-    texts, labels, label_map = make_balanced_dataset(df, label_col)
+splits = 
+{
+    "train": df.sample(frac=0.8, random_state=42),  # 80% для train
+    "test": df.drop(df.sample(frac=0.8, random_state=42).index)  # Остальное — test
+}
 
-    X = compute_embeddings(texts)
-    y = labels
+for split_name, split_df in splits.items():
+  for label_col, filename_prefix in tasks.items():
+      print(f"\n📊 Обработка задачи: {label_col}")
+      texts, labels, label_map = make_balanced_dataset(df, label_col)
 
-    torch.save(X, f"{CACHE_DIR}/{filename_prefix}_X.pt")
-    torch.save(y, f"{CACHE_DIR}/{filename_prefix}_y.pt")
-    with open(f"{CACHE_DIR}/{filename_prefix}_texts.pkl", "wb") as f:
-        pickle.dump(texts, f)
-    with open(f"{CACHE_DIR}/{filename_prefix}_labels.pkl", "wb") as f:
-        pickle.dump(label_map, f)
+      X = compute_embeddings(texts)
+      y = labels
 
-    print(f"✅ Сохранено: {filename_prefix}_X.pt, _y.pt, _texts.pkl, _labels.pkl")
+      torch.save(X, f"{CACHE_DIR}/{filename_prefix}_X.pt")
+      torch.save(y, f"{CACHE_DIR}/{filename_prefix}_y.pt")
+      with open(f"{CACHE_DIR}/{filename_prefix}_texts.pkl", "wb") as f:
+          pickle.dump(texts, f)
+      with open(f"{CACHE_DIR}/{filename_prefix}_labels.pkl", "wb") as f:
+          pickle.dump(label_map, f)
+
+      print(f"✅ Сохранено: {filename_prefix}_X.pt, _y.pt, _texts.pkl, _labels.pkl")
