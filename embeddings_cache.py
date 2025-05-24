@@ -20,8 +20,7 @@ os.makedirs(CACHE_DIR, exist_ok=True)
 
 # --- Загрузка и фильтрация данных ---
 df = pd.concat([pd.read_parquet(f) for f in glob.glob(DATA_PATH)], ignore_index=True)
-df = df[df["response_format"] != "Multiple formats"]
-df = df.reset_index(drop=True)
+df = df[df["response_format"] != "Multiple formats"].reset_index(drop=True)
 
 # --- Загрузка модели ---
 tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
@@ -34,7 +33,7 @@ def mean_pooling(model_output, attention_mask):
     input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
     return (token_embeddings * input_mask_expanded).sum(1) / input_mask_expanded.sum(1)
 
-# --- Вычисление эмбеддингов ---
+# --- Эмбеддинги ---
 @torch.no_grad()
 def compute_embeddings(texts):
     embeddings = []
@@ -52,55 +51,79 @@ def compute_embeddings(texts):
         gc.collect()
     return torch.cat(embeddings, dim=0)
 
-# --- Балансировка по классам ---
-def make_balanced_dataset(df, label_column):
+# --- Балансировка ---
+def make_balanced_split(df, label_column, max_per_class=3500):
     df = df.copy()
     df[label_column] = df[label_column].astype("category")
     label_codes = df[label_column].cat.codes
+    df['label_code'] = label_codes
     label_map = dict(enumerate(df[label_column].cat.categories))
 
     grouped = defaultdict(list)
-    for i, code in enumerate(label_codes):
-        grouped[code].append(i)
-    min_count = min(min(len(v) for v in grouped.values()), 3500)
-    print(f"🔄 Балансировка для '{label_column}': по {min_count} примеров")
+    for i, row in df.iterrows():
+        grouped[row['label_code']].append(i)
+    train_count = max_per_class
+    test_count = train_count // 4
+    total_per_class = train_count + test_count
 
-    selected_indices = []
+    min_count = min(len(v) for v in grouped.values())
+    if min_count < total_per_class:
+        train_count = min_count * 4 // 5
+        test_count = min_count - train_count
+        print(f"⚠️ Уменьшаем train/test: {train_count}/{test_count} (ограничено классом)")
+
+    train_indices, test_indices = [], []
     for indices in grouped.values():
-        selected_indices.extend(random.sample(indices, min_count))
-
-    df_balanced = df.iloc[selected_indices].reset_index(drop=True)
-    labels = torch.tensor(df_balanced[label_column].cat.codes.values, dtype=torch.long)
-    texts = df_balanced["inputs"].tolist()
-    return texts, labels, label_map
+        sample = random.sample(indices, train_count + test_count)
+        train_indices.extend(sample[:train_count])
+        test_indices.extend(sample[train_count:])
 
 
-# --- Основной цикл для всех задач ---
-tasks = 
-{
+    train_df = df.loc[train_indices].reset_index(drop=True)
+    test_df = df.loc[test_indices].reset_index(drop=True)
+
+    return train_df, test_df, label_map
+
+# --- Основной цикл ---
+tasks = {
     "general_task_name": "clf_general_task_name",
     "response_format": "clf_response_format"
 }
 
-splits = 
-{
-    "train": df.sample(frac=0.8, random_state=42),  # 80% для train
-    "test": df.drop(df.sample(frac=0.8, random_state=42).index)  # Остальное — test
-}
+for label_col, prefix in tasks.items():
+    train_X_path = f"{CACHE_DIR}/{prefix}_train_X.pt"
+    train_y_path = f"{CACHE_DIR}/{prefix}_train_y.pt"
+    test_X_path = f"{CACHE_DIR}/{prefix}_test_X.pt"
+    test_y_path = f"{CACHE_DIR}/{prefix}_test_y.pt"
 
-for split_name, split_df in splits.items():
-  for label_col, filename_prefix in tasks.items():
-      print(f"\n📊 Обработка задачи: {label_col}")
-      texts, labels, label_map = make_balanced_dataset(df, label_col)
+    train_X = train_y = test_X = test_y = None
 
-      X = compute_embeddings(texts)
-      y = labels
+    # Балансировка данных
+    train_df, test_df, label_map = make_balanced_split(df, label_col)
+    print(f"🟦 Обучающая выборка: {len(train_df)} | 🟥 Тестовая выборка: {len(test_df)}")
 
-      torch.save(X, f"{CACHE_DIR}/{filename_prefix}_X.pt")
-      torch.save(y, f"{CACHE_DIR}/{filename_prefix}_y.pt")
-      with open(f"{CACHE_DIR}/{filename_prefix}_texts.pkl", "wb") as f:
-          pickle.dump(texts, f)
-      with open(f"{CACHE_DIR}/{filename_prefix}_labels.pkl", "wb") as f:
-          pickle.dump(label_map, f)
+    # --- Train
+    if os.path.exists(train_X_path) and os.path.exists(train_y_path):
+        print("⏭️ Эмбеддинги train уже существуют — загружаем.")
+        train_X = torch.load(train_X_path)
+        train_y = torch.load(train_y_path)
+    else:
+        print("🧠 Эмбеддинги train")
+        train_texts = train_df["inputs"].tolist()
+        train_y = torch.tensor(train_df[label_col].astype("category").cat.codes.values, dtype=torch.long)
+        train_X = compute_embeddings(train_texts)
+        torch.save(train_X, train_X_path)
+        torch.save(train_y, train_y_path)
 
-      print(f"✅ Сохранено: {filename_prefix}_X.pt, _y.pt, _texts.pkl, _labels.pkl")
+    # --- Test
+    if os.path.exists(test_X_path) and os.path.exists(test_y_path):
+        print("⏭️ Эмбеддинги test уже существуют — загружаем.")
+        test_X = torch.load(test_X_path)
+        test_y = torch.load(test_y_path)
+    else:
+        print("🧠 Эмбеддинги test")
+        test_texts = test_df["inputs"].tolist()
+        test_y = torch.tensor(test_df[label_col].astype("category").cat.codes.values, dtype=torch.long)
+        test_X = compute_embeddings(test_texts)
+        torch.save(test_X, test_X_path)
+        torch.save(test_y, test_y_path)
