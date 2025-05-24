@@ -1,12 +1,8 @@
-import torch
-import torch.nn as nn
-from torch.utils.data import DataLoader, TensorDataset, WeightedRandomSampler
-import pickle
 import pandas as pd
 from tqdm import tqdm
 import os
-from collections import defaultdict
-import random
+
+
 
 # --- Настройки ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -26,32 +22,7 @@ test_data1, _ = load_dataset("test_general")
 train_data2, raw_labels2 = load_dataset("train_response")
 test_data2, _ = load_dataset("test_response")
 
-# --- Балансировка эмбеддингов ---
-def balance_embeddings(dataset):
-    embeddings_by_class = defaultdict(list)
-    
-    for x, y in dataset:
-        embeddings_by_class[y.item()].append(x)
-    
-    min_count = min(len(v) for v in embeddings_by_class.values())
-    print(f"🔄 Балансировка: используем по {min_count} примеров на класс.")
-
-    balanced_X = []
-    balanced_y = []
-    
-    for label, embeds in embeddings_by_class.items():
-        selected = random.sample(embeds, min_count)
-        balanced_X.extend(selected)
-        balanced_y.extend([label] * min_count)
-
-    balanced_X = torch.stack(balanced_X)
-    balanced_y = torch.tensor(balanced_y, dtype=torch.long)
-    return TensorDataset(balanced_X, balanced_y), balanced_y.tolist()
-
-train_data1, raw_labels1 = balance_embeddings(train_data1)
-train_data2, raw_labels2 = balance_embeddings(train_data2)
-
-# --- Балансировка загрузчиков (sampler) ---
+# --- Балансировка ---
 def get_balanced_loader(data, raw_labels):
     label_counts = pd.Series(raw_labels).value_counts()
     class_weights = 1. / label_counts
