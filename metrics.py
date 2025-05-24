@@ -1,30 +1,57 @@
+import os
 import torch
 import torch.nn as nn
+from torch.utils.data import TensorDataset, DataLoader
 import pandas as pd
-import numpy as np
-import glob
-import pickle
-from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import classification_report
-from transformers import AutoTokenizer, AutoModel
-from transformers.utils import logging
+import pickle
+from collections import defaultdict, Counter
 
 # --- Настройки ---
-MODEL_NAME = "jinaai/jina-embeddings-v3"
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-BATCH_SIZE = 32
-MAX_LEN = 128
-DATA_PATH = "/data"
-CACHE_LABELS_PATH = "/data/cache_balanced"
+BATCH_SIZE = 256
+CACHE_DIR = "/data/cache_balanced"
+embedding_dim = 1024
+MAX_PER_CLASS = 500
 
-logging.set_verbosity_info()
+# --- Вспомогательная функция: сбалансировать подвыборку ---
+def subsample_balanced(X, y, max_per_class):
+    """Возвращает не более max_per_class примеров на каждый класс."""
+    class_indices = defaultdict(list)
+    for idx, label in enumerate(y):
+        class_indices[int(label)].append(idx)
+
+    selected_indices = []
+    for indices in class_indices.values():
+        selected_indices.extend(indices[:max_per_class])
+
+    X_sub = X[selected_indices]
+    y_sub = y[selected_indices]
+    return X_sub, y_sub
+
+# --- Загрузка датасета ---
+def load_dataset(prefix):
+    X_test = torch.load(f"{CACHE_DIR}/{prefix}_test_X.pt")
+    y_test = torch.load(f"{CACHE_DIR}/{prefix}_test_y.pt")
+
+    X_test, y_test = subsample_balanced(X_test, y_test, MAX_PER_CLASS)
+
+    with open(f"{CACHE_DIR}/{prefix}_train_labels.pkl", "rb") as f:
+        label_map = pickle.load(f)
+
+    return (
+        DataLoader(TensorDataset(X_test, y_test), batch_size=BATCH_SIZE),
+        y_test,
+        label_map,
+        len(label_map)
+    )
 
 # --- Классификатор ---
 class LinearClassifier(nn.Module):
-    def __init__(self, embedding_dim, num_classes):
+    def __init__(self, input_dim, num_classes):
         super().__init__()
         self.model = nn.Sequential(
-            nn.Linear(embedding_dim, 256),
+            nn.Linear(input_dim, 256),
             nn.ReLU(),
             nn.Dropout(0.3),
             nn.Linear(256, num_classes)
@@ -33,75 +60,38 @@ class LinearClassifier(nn.Module):
     def forward(self, x):
         return self.model(x)
 
-# --- Mean Pooling (как при обучении) ---
-def mean_pooling(model_output, attention_mask):
-    token_embeddings = model_output.last_hidden_state
-    input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-    return (token_embeddings * input_mask_expanded).sum(1) / input_mask_expanded.sum(1)
+# --- Оценка модели ---
+def evaluate_model(classifier, dataloader, y_true, label_map, prefix):
+    classifier.eval()
+    all_preds = []
 
-# --- Загрузка модели и токенизатора ---
-tokenizer = AutoTokenizer.from_pretrained(MODEL_NAME)
-encoder = AutoModel.from_pretrained(MODEL_NAME, trust_remote_code=True).to(DEVICE)
-encoder.eval()
-embedding_dim = encoder.config.hidden_size
+    with torch.no_grad():
+        for x_batch, _ in dataloader:
+            x_batch = x_batch.to(DEVICE)
+            logits = classifier(x_batch)
+            preds = torch.argmax(logits, dim=1)
+            all_preds.extend(preds.cpu().tolist())
 
-# --- Загрузка и фильтрация данных ---
-files = glob.glob(f"{DATA_PATH}/*.parquet")
-print(f"{DATA_PATH}/*.parquet")
-df = pd.concat([pd.read_parquet(f) for f in files], ignore_index=True)
-df = df[df["response_format"] != "Multiple formats"].reset_index(drop=True)
+    # Отчёт
+    print(f"\n📊 --- Оценка модели {prefix} ---")
+    print(classification_report(
+        y_true,
+        all_preds,
+        target_names=list(label_map.values()),
+        zero_division=0
+    ))
 
-texts = df["inputs"].tolist()
+# --- Основной цикл по задачам ---
+tasks = {
+    "clf_general_task_name": "/data/clf_general_task_name.pt",
+    "clf_response_format": "/data/clf_response_format.pt"
+}
 
-# --- Кодирование эмбеддингов ---
-def encode_all(texts):
-    all_embeddings = []
-    for i in range(0, len(texts), BATCH_SIZE):
-        batch = texts[i:i + BATCH_SIZE]
-        inputs = tokenizer(batch, return_tensors="pt", padding=True, truncation=True, max_length=MAX_LEN).to(DEVICE)
-        with torch.no_grad():
-            outputs = encoder(**inputs)
-            embeddings = mean_pooling(outputs, inputs["attention_mask"])
-            all_embeddings.append(embeddings.to(torch.float32))
-    return torch.cat(all_embeddings, dim=0)
+for prefix, model_path in tasks.items():
+    print(f"\n--- Загрузка и оценка {prefix} ---")
 
-embeddings = encode_all(texts)
+    test_loader, y_true_tensor, label_map, num_classes = load_dataset(prefix)
+    classifier = LinearClassifier(embedding_dim, num_classes).to(DEVICE)
+    classifier.load_state_dict(torch.load(model_path, map_location=DEVICE))
 
-# --- Загрузка label map'ов ---
-with open(f"{CACHE_LABELS_PATH}/clf_general_task_name_train_labels.pkl", "rb") as f:
-    label_map_gen = pickle.load(f)
-with open(f"{CACHE_LABELS_PATH}/clf_response_format_train_labels.pkl", "rb") as f:
-    label_map_resp = pickle.load(f)
-
-# --- Восстановление LabelEncoder'ов ---
-le_gen = LabelEncoder()
-le_gen.classes_ = np.array(list(label_map_gen.values()))
-
-le_resp = LabelEncoder()
-le_resp.classes_ = np.array(list(label_map_resp.values()))
-
-# --- Получение истинных меток ---
-y_true_gen = le_gen.transform(df["general_task_name"])
-y_true_resp = le_resp.transform(df["response_format"])
-
-# --- Загрузка обученных классификаторов ---
-clf1 = LinearClassifier(embedding_dim, len(le_gen.classes_)).to(DEVICE)
-clf2 = LinearClassifier(embedding_dim, len(le_resp.classes_)).to(DEVICE)
-
-clf1.load_state_dict(torch.load(f"{DATA_PATH}/clf_general_task_name.pt", map_location=DEVICE))
-clf2.load_state_dict(torch.load(f"{DATA_PATH}/clf_response_format.pt", map_location=DEVICE))
-
-clf1.eval()
-clf2.eval()
-
-# --- Предсказания ---
-with torch.no_grad():
-    preds1 = torch.argmax(clf1(embeddings), dim=1).cpu().numpy()
-    preds2 = torch.argmax(clf2(embeddings), dim=1).cpu().numpy()
-
-# --- Classification reports ---
-print("\n\n--- Отчёт по general_task_name ---")
-print(classification_report(y_true_gen, preds1, target_names=le_gen.classes_, zero_division=0))
-
-print("\n--- Отчёт по response_format ---")
-print(classification_report(y_true_resp, preds2, target_names=le_resp.classes_, zero_division=0))
+    evaluate_model(classifier, test_loader, y_true_tensor.tolist(), label_map, prefix)
