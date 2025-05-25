@@ -4,6 +4,7 @@ import torch.nn as nn
 from torch.utils.data import TensorDataset, DataLoader, WeightedRandomSampler
 import pandas as pd
 from tqdm import tqdm
+import pickle
 
 # --- Настройки ---
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -11,30 +12,29 @@ BATCH_SIZE = 256
 EPOCHS = 6
 LR = 1e-4
 CACHE_DIR = "/data/cache_balanced"
+embedding_dim = 1024
 
 # --- Загрузка датасета ---
-def load_dataset(name):
-    X = torch.load(f"{CACHE_DIR}/{name}_X.pt")
-    y = torch.load(f"{CACHE_DIR}/{name}_y.pt")
-    return TensorDataset(X, y), y.tolist()
-
-train_data1, raw_labels1 = load_dataset("train_general")
-test_data1, _ = load_dataset("test_general")
-train_data2, raw_labels2 = load_dataset("train_response")
-test_data2, _ = load_dataset("test_response")
+def load_dataset(prefix):
+    X_train = torch.load(f"{CACHE_DIR}/{prefix}_train_X.pt")
+    y_train = torch.load(f"{CACHE_DIR}/{prefix}_train_y.pt")
+    X_test = torch.load(f"{CACHE_DIR}/{prefix}_test_X.pt")
+    y_test = torch.load(f"{CACHE_DIR}/{prefix}_test_y.pt")
+    with open(f"{CACHE_DIR}/{prefix}_train_labels.pkl", "rb") as f:
+        label_map = pickle.load(f)
+    return (TensorDataset(X_train, y_train), y_train.tolist(),
+            DataLoader(TensorDataset(X_test, y_test), batch_size=BATCH_SIZE),
+            len(label_map))
 
 # --- Балансировка ---
-def get_balanced_loader(data, raw_labels):
+def get_balanced_loader(dataset, raw_labels):
     label_counts = pd.Series(raw_labels).value_counts()
     class_weights = 1. / label_counts
     sample_weights = [class_weights[l] for l in raw_labels]
     sampler = WeightedRandomSampler(sample_weights, num_samples=len(sample_weights), replacement=True)
-    return DataLoader(data, batch_size=BATCH_SIZE, sampler=sampler), torch.tensor(class_weights.values, dtype=torch.float32).to(DEVICE)
-
-train_loader1, weights1 = get_balanced_loader(train_data1, raw_labels1)
-test_loader1 = DataLoader(test_data1, batch_size=BATCH_SIZE)
-train_loader2, weights2 = get_balanced_loader(train_data2, raw_labels2)
-test_loader2 = DataLoader(test_data2, batch_size=BATCH_SIZE)
+    loader = DataLoader(dataset, batch_size=BATCH_SIZE, sampler=sampler)
+    weights_tensor = torch.tensor(class_weights.values, dtype=torch.float32).to(DEVICE)
+    return loader, weights_tensor
 
 # --- Классификатор ---
 class LinearClassifier(nn.Module):
@@ -50,9 +50,6 @@ class LinearClassifier(nn.Module):
     def forward(self, x):
         return self.model(x)
 
-# --- Размерность эмбеддингов ---
-embedding_dim = 1024
-
 # --- Обучение ---
 def train_classifier(classifier, optimizer, loader, criterion):
     classifier.train()
@@ -61,31 +58,31 @@ def train_classifier(classifier, optimizer, loader, criterion):
         pbar = tqdm(loader, desc=f"🧪 Эпоха {epoch + 1}/{EPOCHS}")
         for x_batch, y_batch in pbar:
             x_batch, y_batch = x_batch.to(DEVICE), y_batch.to(DEVICE)
-
             logits = classifier(x_batch)
             loss = criterion(logits, y_batch)
-
             optimizer.zero_grad()
             loss.backward()
             optimizer.step()
-
             total_loss += loss.item()
             pbar.set_postfix({"Loss": f"{loss.item():.4f}"})
         print(f"📉 Средний Loss за эпоху {epoch + 1}: {total_loss / len(loader):.4f}")
 
-# --- Инициализация и обучение ---
-clf1 = LinearClassifier(embedding_dim, len(set(raw_labels1))).to(DEVICE)
-opt1 = torch.optim.Adam(clf1.parameters(), lr=LR)
-criterion1 = nn.CrossEntropyLoss(weight=weights1)
+# --- Основной цикл по задачам ---
+tasks = {
+    "clf_general_task_name": "/data/clf_general_task_name.pt",
+    "clf_response_format": "/data/clf_response_format.pt"
+}
 
-print("\n--- Обучение по general_task_name ---")
-train_classifier(clf1, opt1, train_loader1, criterion1)
-torch.save(clf1.state_dict(), "/data/clf_general_task_name.pt")
+for prefix, model_path in tasks.items():
+    print(f"\n--- Обучение по {prefix} ---")
 
-clf2 = LinearClassifier(embedding_dim, len(set(raw_labels2))).to(DEVICE)
-opt2 = torch.optim.Adam(clf2.parameters(), lr=LR)
-criterion2 = nn.CrossEntropyLoss(weight=weights2)
+    train_dataset, raw_labels, test_loader, num_classes = load_dataset(prefix)
+    train_loader, class_weights = get_balanced_loader(train_dataset, raw_labels)
 
-print("\n--- Обучение по response_format ---")
-train_classifier(clf2, opt2, train_loader2, criterion2)
-torch.save(clf2.state_dict(), "/data/clf_response_format.pt")
+    classifier = LinearClassifier(embedding_dim, num_classes).to(DEVICE)
+    optimizer = torch.optim.Adam(classifier.parameters(), lr=LR)
+    criterion = nn.CrossEntropyLoss(weight=class_weights)
+
+    train_classifier(classifier, optimizer, train_loader, criterion)
+    torch.save(classifier.state_dict(), model_path)
+    print(f"💾 Сохранено: {model_path}")
