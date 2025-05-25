@@ -11,5 +11,4 @@ snapshot_download(<br>
 )<br>
 
 
-https://drive.google.com/file/d/1rw_5rC4K9xoo2kP1jf8_5vF1PJuwAJBT/view?usp=drive_link<br>
-https://drive.google.com/file/d/1wSsJUPnlzK4PL5G1thPcPvnHQbVt8-Mj/view?usp=drive_link<br>
+https://drive.google.com/file/d/1szhg2VbZZ7KfApN-oDNTep1icLA9mreG/view?usp=sharing
